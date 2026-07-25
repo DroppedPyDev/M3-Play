@@ -1013,9 +1013,10 @@ fun HomePageSectionTitle(
     }
 }
 
+// Container logic rewritten to emit separate items for correct scroll offset
 @OptIn(ExperimentalFoundationApi::class)
 fun LazyListScope.AccountPlaylistsContainer(
-    viewModel: HomeViewModel,
+    accountPlaylists: List<PlaylistItem>?,
     accountName: String?,
     accountImageUrl: String?,
     mediaMetadata: MediaMetadata?,
@@ -1026,20 +1027,37 @@ fun LazyListScope.AccountPlaylistsContainer(
     haptic: HapticFeedback,
     scope: CoroutineScope
 ) {
-    item {
-        val accountPlaylists by viewModel.accountPlaylists.collectAsState()
-        if (!accountPlaylists.isNullOrEmpty()) {
-            Column {
-                AccountPlaylistsTitle(accountName = accountName ?: "", accountImageUrl = accountImageUrl, onClick = { navController.navigate("account") }, modifier = Modifier)
-                AccountPlaylistsSection(accountPlaylists = accountPlaylists!!, accountName = accountName ?: "", accountImageUrl = accountImageUrl, mediaMetadata = mediaMetadata, isPlaying = isPlaying, navController = navController, playerConnection = playerConnection, menuState = menuState, haptic = haptic, scope = scope)
-            }
+    if (!accountPlaylists.isNullOrEmpty()) {
+        item(key = "account_playlists_title", contentType = "title") {
+            AccountPlaylistsTitle(
+                accountName = accountName ?: "", 
+                accountImageUrl = accountImageUrl, 
+                onClick = { navController.navigate("account") }, 
+                modifier = Modifier.animateItem()
+            )
+        }
+        item(key = "account_playlists_section", contentType = "section") {
+            AccountPlaylistsSection(
+                accountPlaylists = accountPlaylists, 
+                accountName = accountName ?: "", 
+                accountImageUrl = accountImageUrl, 
+                mediaMetadata = mediaMetadata, 
+                isPlaying = isPlaying, 
+                navController = navController, 
+                playerConnection = playerConnection, 
+                menuState = menuState, 
+                haptic = haptic, 
+                scope = scope,
+                modifier = Modifier.animateItem()
+            )
         }
     }
 }
 
+// UI FIXED: Container logic rewritten to emit separate items for correct scroll offset
 @OptIn(ExperimentalFoundationApi::class)
 fun LazyListScope.SimilarRecommendationsContainer(
-    viewModel: HomeViewModel,
+    similarRecommendations: List<SimilarRecommendation>?,
     mediaMetadata: MediaMetadata?,
     isPlaying: Boolean,
     navController: NavController,
@@ -1048,13 +1066,26 @@ fun LazyListScope.SimilarRecommendationsContainer(
     haptic: HapticFeedback,
     scope: CoroutineScope
 ) {
-     item {
-        val similarRecommendations by viewModel.similarRecommendations.collectAsState()
-        Column {
-            similarRecommendations?.forEach { recommendation ->
-                SimilarRecommendationsTitle(recommendation = recommendation, navController = navController, modifier = Modifier)
-                SimilarRecommendationsSection(recommendation = recommendation, mediaMetadata = mediaMetadata, isPlaying = isPlaying, navController = navController, playerConnection = playerConnection, menuState = menuState, haptic = haptic, scope = scope)
-             }
+    similarRecommendations?.forEachIndexed { index, recommendation ->
+        item(key = "similar_title_$index", contentType = "title") {
+            SimilarRecommendationsTitle(
+                recommendation = recommendation, 
+                navController = navController, 
+                modifier = Modifier.animateItem()
+            )
+        }
+        item(key = "similar_section_$index", contentType = "section") {
+            SimilarRecommendationsSection(
+                recommendation = recommendation, 
+                mediaMetadata = mediaMetadata, 
+                isPlaying = isPlaying, 
+                navController = navController, 
+                playerConnection = playerConnection, 
+                menuState = menuState, 
+                haptic = haptic, 
+                scope = scope,
+                modifier = Modifier.animateItem()
+            )
         }
     }
 }
