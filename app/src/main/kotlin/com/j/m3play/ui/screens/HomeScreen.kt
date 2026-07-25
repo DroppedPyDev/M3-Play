@@ -149,6 +149,10 @@ fun HomeScreen(
     val communityPlaylists by viewModel.communityPlaylists.collectAsState(initial = emptyList())
     val homePage by viewModel.homePage.collectAsState()
     val selectedChip by viewModel.selectedChip.collectAsState()
+    
+    // Collecting these states here to pass down directly
+    val accountPlaylists by viewModel.accountPlaylists.collectAsState()
+    val similarRecommendations by viewModel.similarRecommendations.collectAsState()
 
     val isLoading: Boolean by viewModel.isLoading.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
@@ -384,7 +388,18 @@ fun HomeScreen(
                     }
                     // ----------------------------------------
 
-                    AccountPlaylistsContainer(viewModel = viewModel, accountName = accountName, accountImageUrl = url, mediaMetadata = mediaMetadata, isPlaying = isPlaying, navController = navController, playerConnection = playerConnection, menuState = menuState, haptic = haptic, scope = scope)
+                    AccountPlaylistsContainer(
+                        accountPlaylists = accountPlaylists,
+                        accountName = accountName, 
+                        accountImageUrl = url, 
+                        mediaMetadata = mediaMetadata, 
+                        isPlaying = isPlaying, 
+                        navController = navController, 
+                        playerConnection = playerConnection, 
+                        menuState = menuState, 
+                        haptic = haptic, 
+                        scope = scope
+                    )
 
                     forgottenFavorites?.takeIf { it.isNotEmpty() }?.let { favorites ->
                         item(key = "forgotten_favorites_title", contentType = "title") { NavigationTitle(title = stringResource(R.string.forgotten_favorites), modifier = Modifier.animateItem()) }
@@ -401,7 +416,16 @@ fun HomeScreen(
                         }
                     }
 
-                    SimilarRecommendationsContainer(viewModel = viewModel, mediaMetadata = mediaMetadata, isPlaying = isPlaying, navController = navController, playerConnection = playerConnection, menuState = menuState, haptic = haptic, scope = scope)
+                    SimilarRecommendationsContainer(
+                        similarRecommendations = similarRecommendations,
+                        mediaMetadata = mediaMetadata, 
+                        isPlaying = isPlaying, 
+                        navController = navController, 
+                        playerConnection = playerConnection, 
+                        menuState = menuState, 
+                        haptic = haptic, 
+                        scope = scope
+                    )
 
                     homePage?.sections?.forEachIndexed { index, section ->
                         item(key = "section_title_${section.title}_$index", contentType = "title") { HomePageSectionTitle(section = section, navController = navController, modifier = Modifier.animateItem()) }
