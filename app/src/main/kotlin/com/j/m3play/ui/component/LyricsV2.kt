@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.*
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.nestedscroll.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -54,6 +55,7 @@ import coil3.request.ImageRequest
 import coil3.request.allowHardware
 import coil3.toBitmap
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
@@ -79,7 +81,6 @@ import com.j.m3play.utils.*
 private const val LRC_LEAD_MS = 300L
 private const val TTML_LEAD_MS = 0L
 private const val LYRIC_VISUAL_TUNING_OFFSET_MS = 150L
-private const val MANUAL_SCROLL_TIMEOUT_MS = 3000L
 private val HEAD_LYRICS_ENTRY = LyricsEntry(time = 0L, text = "")
 
 // Playback Drift Correction Constants
@@ -94,6 +95,9 @@ private const val ACCORD_INACTIVE_SCALE = 0.96f
 private const val ACCORD_MAX_BLUR = 8f
 private const val ACCORD_BLUR_STEP = 2f
 private val AccordDecelerateEasing = CubicBezierEasing(0f, 0f, 0.2f, 1f)
+
+private const val LYRICS_STAGGER_DELAY_PER_DISTANCE = 20
+private const val LYRICS_STAGGER_DELAY_MAX_MS = 200
 
 private fun isRtlText(text: String): Boolean {
     for (ch in text) {
@@ -110,6 +114,7 @@ private fun isRtlText(text: String): Boolean {
     return false
 }
 
+// Ultra-lightweight Apple Music Style clipRect word animation
 @Composable
 private fun KaraokeWord(
     text: String,
@@ -122,124 +127,55 @@ private fun KaraokeWord(
     inactiveAlpha: Float,
     fontWeight: FontWeight = FontWeight.ExtraBold,
     isBackground: Boolean = false,
-    nudgeEnabled: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val duration = endTime - startTime
+    val effectiveFontSize = if (isBackground) fontSize * 0.7f else fontSize
+    val effectiveAlpha = if (isBackground) 0.6f else 1f
     
-    // Gradient mask ke liye glow effect aur spacing
-    val glowPadding = 10.dp
+    val activeColor = textColor.copy(alpha = effectiveAlpha)
+    val inactiveColor = textColor.copy(alpha = inactiveAlpha * effectiveAlpha)
 
-    Box(
-        modifier = modifier
-            // Layout logic taaki glow screen ke bahar na kate
-            .layout { measurable, constraints ->
-                val glowPaddingPx = glowPadding.roundToPx()
-                val looseConstraints = constraints.copy(
-                    minWidth = 0,
-                    maxWidth = Constraints.Infinity,
-                    minHeight = 0,
-                    maxHeight = Constraints.Infinity
-                )
-                val placeable = measurable.measure(looseConstraints)
-                layout(
-                    (placeable.width - glowPaddingPx * 2).coerceAtLeast(0),
-                    (placeable.height - glowPaddingPx * 2).coerceAtLeast(0)
-                ) {
-                    placeable.place(-glowPaddingPx, -glowPaddingPx)
-                }
-            }
-            // Nudge (shake) aur position logic
-            .graphicsLayer {
-                clip = false
-                val currentTime = currentTimeProvider()
-                
-                // Shake effect logic, simple aur smooth
-                val maxShift = 5f
-                val attackDuration = 120L
-                val decayDuration = 250L
-                val totalImpulseTime = attackDuration + decayDuration
-                
-                val shift = if (nudgeEnabled && currentTime >= startTime && currentTime < startTime + totalImpulseTime) {
-                    val timeSinceStart = currentTime - startTime
-                    if (timeSinceStart < attackDuration) {
-                        // Shake up
-                        androidx.compose.ui.util.lerp(0f, maxShift, timeSinceStart.toFloat() / attackDuration.toFloat())
-                    } else {
-                        // Shake back down
-                        androidx.compose.ui.util.lerp(maxShift, 0f, (timeSinceStart - attackDuration).toFloat() / decayDuration.toFloat())
-                    }
-                } else 0f
-                
-                translationX = if (isRtl) -shift else shift
-            }
-    ) {
-        val effectiveFontSize = if (isBackground) fontSize * 0.7f else fontSize
-        val effectiveAlpha = if (isBackground) 0.6f else 1f
-        
-        // --- Optimized drawing logic ---
-
-        // 1. Piche ka base text, jo dim hai (un-sung part)
+    Box(modifier = modifier) {
+        // Inactive Text Layer
         Text(
             text = text,
             fontSize = effectiveFontSize,
-            color = textColor.copy(alpha = inactiveAlpha * effectiveAlpha),
+            color = inactiveColor,
             fontWeight = fontWeight,
-            modifier = Modifier.padding(glowPadding)
+            modifier = Modifier.padding(horizontal = 2.dp, vertical = 4.dp)
         )
-
-        // 2. Active, bright text (sung part) jo ek gradient brush se clipped hai
-        Box(
+        
+        // Active Text Layer with clipRect
+        Text(
+            text = text,
+            fontSize = effectiveFontSize,
+            color = activeColor,
+            fontWeight = fontWeight,
             modifier = Modifier
-                .padding(glowPadding)
-                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .padding(horizontal = 2.dp, vertical = 4.dp)
                 .drawWithContent {
                     val currentTime = currentTimeProvider()
-                    val progress = if (duration > 0) ((currentTime - startTime).toFloat() / duration.toFloat()).coerceIn(0f, 1f) else if (currentTime >= endTime) 1f else 0f
+                    val progress = if (duration > 0) {
+                        ((currentTime - startTime).toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+                    } else if (currentTime >= endTime) {
+                        1f 
+                    } else 0f
                     
-                    // Pehle poora white text draw karo
-                    drawContent()
-                    
-                    // Ab ek black-to-transparent gradient draw karo jo move karega progress ke sath
-                    val fadeWidth = 20f // Gradient ki softness/blurriness kitni hogi
-                    val textWidth = size.width
-                    val fillWidth = textWidth * progress
-                    
-                    val endFraction = (fillWidth + fadeWidth) / size.width
-                    val solidFraction = fillWidth / size.width
-
-                    // DstIn blend mode se white text ko gradient mask ke hisab se clip karte hain
-                    val softFillBrush = if (!isRtl) {
-                        // LTR ke liye gradient left-to-right move hoga
-                        Brush.horizontalGradient(
-                            0f to Color.Black,
-                            solidFraction.coerceAtLeast(0f) to Color.Black,
-                            endFraction.coerceAtMost(1f) to Color.Transparent
-                        )
-                    } else {
-                        // RTL ke liye gradient right-to-left move hoga
-                        val solidStartX = (textWidth - fillWidth).coerceIn(0f, size.width)
-                        val fadeStartX = (solidStartX - fadeWidth).coerceIn(0f, size.width)
-                        val fadeStartFraction = (fadeStartX / size.width).coerceIn(0f, 1f)
-                        val solidStartFraction = (solidStartX / size.width).coerceIn(0f, 1f)
-                        Brush.horizontalGradient(
-                            0f to Color.Transparent,
-                            fadeStartFraction to Color.Transparent,
-                            solidStartFraction to Color.Black,
-                            1f to Color.Black
-                        )
+                    if (progress > 0f) {
+                        val width = size.width
+                        if (!isRtl) {
+                            clipRect(left = 0f, top = 0f, right = width * progress, bottom = size.height) {
+                                this@drawWithContent.drawContent()
+                            }
+                        } else {
+                            clipRect(left = width - (width * progress), top = 0f, right = width, bottom = size.height) {
+                                this@drawWithContent.drawContent()
+                            }
+                        }
                     }
-                    drawRect(brush = softFillBrush, blendMode = BlendMode.DstIn)
                 }
-        ) {
-            // Yeh wahi white text hai jo uper clipping logic mein drawContent() se use hota hai
-            Text(
-                text = text,
-                fontSize = effectiveFontSize,
-                color = textColor.copy(alpha = effectiveAlpha),
-                fontWeight = fontWeight
-            )
-        }
+        )
     }
 }
 
@@ -383,11 +319,7 @@ fun LyricsV2(
                 anchorPlayerPositionMs = rawPos
                 anchorFrameNanos = 0L
                 currentPositionMs = (rawPos + leadMs + LYRIC_VISUAL_TUNING_OFFSET_MS).coerceAtLeast(0L)
-                if (sliderPos == null) {
-                    delay(100L)
-                } else {
-                    withFrameNanos { }
-                }
+                if (sliderPos == null) delay(100L) else withFrameNanos { }
             } else {
                 val frameNanos = withFrameNanos { it }
                 if (anchorFrameNanos == 0L) {
@@ -408,9 +340,7 @@ fun LyricsV2(
                     driftMs != 0L -> {
                         projectedPosition + (driftMs * SMOOTH_PLAYBACK_DRIFT_CORRECTION).roundToLong()
                     }
-                    else -> {
-                        projectedPosition
-                    }
+                    else -> projectedPosition
                 }.coerceAtLeast(0L)
                 
                 currentPositionMs = (nextPosition + leadMs + LYRIC_VISUAL_TUNING_OFFSET_MS).coerceAtLeast(0L)
@@ -426,6 +356,8 @@ fun LyricsV2(
     var isManualScrolling by remember { mutableStateOf(false) }
     var deferredCurrentLineIndex by remember { mutableIntStateOf(0) }
     val itemHeights = remember { mutableStateMapOf<Int, Int>() }
+    var isInitialLayout by remember(lyrics, entriesWithWords) { mutableStateOf(true) }
+    
     var flingJob by remember { mutableStateOf<Job?>(null) }
     val velocityTracker = remember { VelocityTracker() }
     val decayAnimSpec = remember { exponentialDecay<Float>(frictionMultiplier = 1.8f) }
@@ -433,10 +365,38 @@ fun LyricsV2(
     LaunchedEffect(currentLineIndex, isAutoScrollEnabled) {
         if (isAutoScrollEnabled) {
             deferredCurrentLineIndex = currentLineIndex
-            if (abs(userManualOffset) > 1f) {
-                Animatable(userManualOffset).animateTo(0f, tween(400, easing = FastOutSlowInEasing)) { userManualOffset = value }
+        }
+    }
+
+    // Advanced recovery animation from ExperimentalLyrics.kt
+    LaunchedEffect(isAutoScrollEnabled, entriesWithWords) {
+        if (isAutoScrollEnabled) {
+            val start = userManualOffset
+            if (abs(start) < 1f) {
+                userManualOffset = 0f
+                return@LaunchedEffect
+            }
+            val anim = Animatable(start)
+            var lastValue = start
+            anim.animateTo(0f, tween((abs(start) / 4f).toInt().coerceIn(200, 600), easing = FastOutSlowInEasing)) {
+                userManualOffset += (value - lastValue)
+                lastValue = value
             }
             userManualOffset = 0f
+        }
+    }
+
+    // Initial Layout Stability Logic from ExperimentalLyrics.kt
+    LaunchedEffect(lyrics, entriesWithWords.size) {
+        if (entriesWithWords.isNotEmpty()) {
+            isInitialLayout = true
+            snapshotFlow { 
+                val h = itemHeights.toMap()
+                val windowStart = (deferredCurrentLineIndex - 8).coerceAtLeast(0)
+                val windowEnd = (deferredCurrentLineIndex + 12).coerceAtMost(entriesWithWords.size - 1)
+                (windowStart..windowEnd).all { h.containsKey(it) } 
+            }.first { it }
+            isInitialLayout = false
         }
     }
 
@@ -461,6 +421,7 @@ fun LyricsV2(
         val maxHeightPx = constraints.maxHeight.toFloat()
         val anchorY = maxHeightPx * 0.35f
         val lineHeightPx = with(density) { 68.dp.toPx() }
+        val constraintLineHeightPx = with(density) { 120.dp.toPx() } // ExperimentalLyrics robust fallback
         val gapPx = with(density) { 16.dp.toPx() }
 
         val positions = remember(itemHeights.toMap(), deferredCurrentLineIndex, entriesWithWords) {
@@ -485,16 +446,16 @@ fun LyricsV2(
         val minOffset = remember(itemHeights.toMap(), entriesWithWords, deferredCurrentLineIndex, anchorY) {
             if (entriesWithWords.isEmpty()) 0f else {
                 val totalBelow = (deferredCurrentLineIndex until entriesWithWords.size - 1).sumOf { 
-                    ((itemHeights[it]?.toFloat() ?: lineHeightPx) + gapPx).toDouble() 
+                    ((itemHeights[it]?.toFloat() ?: constraintLineHeightPx) + gapPx).toDouble() 
                 }.toFloat()
-                val lastHeight = itemHeights[entriesWithWords.size - 1]?.toFloat() ?: lineHeightPx
+                val lastHeight = itemHeights[entriesWithWords.size - 1]?.toFloat() ?: constraintLineHeightPx
                 with(density) { 100.dp.toPx() } - anchorY - totalBelow - lastHeight
             }
         }
         val maxOffset = remember(itemHeights.toMap(), entriesWithWords, deferredCurrentLineIndex, maxHeightPx, anchorY) {
             if (entriesWithWords.isEmpty()) 0f else {
                 val totalAbove = (0 until deferredCurrentLineIndex).sumOf { 
-                    ((itemHeights[it]?.toFloat() ?: lineHeightPx) + gapPx).toDouble() 
+                    ((itemHeights[it]?.toFloat() ?: constraintLineHeightPx) + gapPx).toDouble() 
                 }.toFloat()
                 maxHeightPx - with(density) { 150.dp.toPx() } - anchorY + totalAbove
             }
@@ -502,15 +463,22 @@ fun LyricsV2(
         val scrollClampMin = minOf(minOffset, maxOffset)
         val scrollClampMax = maxOf(minOffset, maxOffset)
 
+        LaunchedEffect(scrollClampMin, scrollClampMax) {
+            if (userManualOffset < scrollClampMin || userManualOffset > scrollClampMax) {
+                userManualOffset = userManualOffset.coerceIn(scrollClampMin, scrollClampMax)
+            }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .smoothFadingEdge(vertical = 80.dp)
+                .smoothFadingEdge(vertical = 80.dp) // Keeps your specific fade size intact
                 .clipToBounds()
                 .pointerInput(Unit) {
                     awaitPointerEventScope {
                         while (true) {
                             val down = awaitFirstDown(requireUnconsumed = false)
+                            if (isInitialLayout) continue
                             flingJob?.cancel()
                             velocityTracker.resetTracking()
                             isAutoScrollEnabled = false
@@ -539,11 +507,18 @@ fun LyricsV2(
 
                 key(index, item.text) {
                     val distance = abs(index - deferredCurrentLineIndex)
-                    val rawTargetOffset = anchorY + (positions[index] ?: ((index - deferredCurrentLineIndex) * lineHeightPx))
+                    val targetOffset = anchorY + (positions[index] ?: ((index - deferredCurrentLineIndex) * lineHeightPx))
                     
+                    // Exact FrozenOffset Logic from ExperimentalLyrics.kt
+                    val frozenOffset = remember { mutableFloatStateOf(targetOffset) }
+                    LaunchedEffect(isAutoScrollEnabled, targetOffset, isInitialLayout) {
+                        if (isAutoScrollEnabled || isInitialLayout) frozenOffset.floatValue = targetOffset
+                    }
+
                     val animatedOffset by animateFloatAsState(
-                        targetValue = rawTargetOffset,
-                        animationSpec = tween(750, (distance * 20).coerceAtMost(200), FastOutSlowInEasing),
+                        targetValue = if (isAutoScrollEnabled) targetOffset else frozenOffset.floatValue,
+                        animationSpec = if (isInitialLayout || !isAutoScrollEnabled) snap() 
+                                        else tween(750, (distance * LYRICS_STAGGER_DELAY_PER_DISTANCE).coerceAtMost(LYRICS_STAGGER_DELAY_MAX_MS), FastOutSlowInEasing),
                         label = "offset_$index"
                     )
 
@@ -643,10 +618,9 @@ fun LyricsV2(
                                                         isRtl = lineIsRtl,
                                                         fontSize = if (isAllBackground) (lyricsTextSize * 0.82f).sp else lyricsTextSize.sp,
                                                         textColor = textColor,
-                                                        inactiveAlpha = if (isActive) 0.15f else 0.2f, // Yahan alpha update hua hai
+                                                        inactiveAlpha = if (isActive) 0.25f else 0.4f, 
                                                         fontWeight = currentFontWeight,
-                                                        isBackground = isAllBackground,
-                                                        nudgeEnabled = isActive 
+                                                        isBackground = isAllBackground
                                                     )
                                                 }
                                             }
@@ -668,10 +642,9 @@ fun LyricsV2(
                                                         isRtl = lineIsRtl,
                                                         fontSize = (lyricsTextSize * 0.65f).sp,
                                                         textColor = textColor,
-                                                        inactiveAlpha = if (isActive) 0.15f else 0.2f, // Yahan bhi alpha update hua hai
+                                                        inactiveAlpha = if (isActive) 0.25f else 0.4f, 
                                                         fontWeight = currentFontWeight,
-                                                        isBackground = true,
-                                                        nudgeEnabled = isActive
+                                                        isBackground = true
                                                     )
                                                 }
                                             }
@@ -758,7 +731,6 @@ fun LyricsV2(
         val (_, songTitle, artists) = shareDialogData!! 
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         
-        // Simple plain text for normal intent sharing
         val plainLyricsText = remember(selectedIndices) {
             selectedIndices.sorted().mapNotNull { entriesWithWords.getOrNull(it)?.text }.joinToString("\n")
         }
@@ -827,7 +799,6 @@ fun LyricsV2(
         val (_, songTitle, artists) = shareDialogData!!
         val coverUrl = mediaMetadata?.thumbnailUrl
 
-        
         var selectedAspectRatio by remember { mutableFloatStateOf(1f) } 
         var selectedTextAlign by remember { mutableStateOf(TextAlign.Center) }
         var customBlur by remember { mutableFloatStateOf(-1f) } 
@@ -841,7 +812,6 @@ fun LyricsV2(
         var showTrackInfo by remember { mutableStateOf(true) } 
         var showRomanized by remember { mutableStateOf(false) }
 
-        
         val displayLyricsText = remember(selectedIndices.toList(), showRomanized) {
             selectedIndices.sorted().mapNotNull { i ->
                 val entry = entriesWithWords.getOrNull(i)
@@ -896,7 +866,6 @@ fun LyricsV2(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
                 )
 
-            
                 Box(modifier = Modifier.fillMaxWidth().height(380.dp), contentAlignment = Alignment.Center) {
                     Box(modifier = Modifier.fillMaxHeight().aspectRatio(selectedAspectRatio)) {
                         LyricsImageCard(
