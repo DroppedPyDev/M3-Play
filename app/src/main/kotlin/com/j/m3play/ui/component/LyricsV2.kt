@@ -122,25 +122,39 @@ private fun KaraokeWord(
     inactiveAlpha: Float,
     fontWeight: FontWeight = FontWeight.ExtraBold,
     isBackground: Boolean = false,
-    nudgeEnabled: Boolean = true,
+    nudgeEnabled: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val duration = endTime - startTime
+    
+    // Gradient mask ke liye glow effect aur spacing
     val glowPadding = 10.dp
 
     Box(
         modifier = modifier
+            // Layout logic taaki glow screen ke bahar na kate
             .layout { measurable, constraints ->
                 val glowPaddingPx = glowPadding.roundToPx()
-                val looseConstraints = constraints.copy(minWidth = 0, maxWidth = Constraints.Infinity, minHeight = 0, maxHeight = Constraints.Infinity)
+                val looseConstraints = constraints.copy(
+                    minWidth = 0,
+                    maxWidth = Constraints.Infinity,
+                    minHeight = 0,
+                    maxHeight = Constraints.Infinity
+                )
                 val placeable = measurable.measure(looseConstraints)
-                layout((placeable.width - glowPaddingPx * 2).coerceAtLeast(0), (placeable.height - glowPaddingPx * 2).coerceAtLeast(0)) {
+                layout(
+                    (placeable.width - glowPaddingPx * 2).coerceAtLeast(0),
+                    (placeable.height - glowPaddingPx * 2).coerceAtLeast(0)
+                ) {
                     placeable.place(-glowPaddingPx, -glowPaddingPx)
                 }
             }
+            // Nudge (shake) aur position logic
             .graphicsLayer {
                 clip = false
                 val currentTime = currentTimeProvider()
+                
+                // Shake effect logic, simple aur smooth
                 val maxShift = 5f
                 val attackDuration = 120L
                 val decayDuration = 250L
@@ -149,8 +163,10 @@ private fun KaraokeWord(
                 val shift = if (nudgeEnabled && currentTime >= startTime && currentTime < startTime + totalImpulseTime) {
                     val timeSinceStart = currentTime - startTime
                     if (timeSinceStart < attackDuration) {
+                        // Shake up
                         androidx.compose.ui.util.lerp(0f, maxShift, timeSinceStart.toFloat() / attackDuration.toFloat())
                     } else {
+                        // Shake back down
                         androidx.compose.ui.util.lerp(maxShift, 0f, (timeSinceStart - attackDuration).toFloat() / decayDuration.toFloat())
                     }
                 } else 0f
@@ -161,55 +177,68 @@ private fun KaraokeWord(
         val effectiveFontSize = if (isBackground) fontSize * 0.7f else fontSize
         val effectiveAlpha = if (isBackground) 0.6f else 1f
         
-        Text(text = text, fontSize = effectiveFontSize, color = textColor.copy(alpha = inactiveAlpha * effectiveAlpha), fontWeight = fontWeight, modifier = Modifier.padding(glowPadding))
+        // --- Optimized drawing logic ---
 
+        // 1. Piche ka base text, jo dim hai (un-sung part)
         Text(
-            text = text, fontSize = effectiveFontSize, color = textColor.copy(alpha = effectiveAlpha), fontWeight = fontWeight,
-            modifier = Modifier.padding(glowPadding).drawWithContent {
-                if (currentTimeProvider() >= endTime) drawContent()
-            }
+            text = text,
+            fontSize = effectiveFontSize,
+            color = textColor.copy(alpha = inactiveAlpha * effectiveAlpha),
+            fontWeight = fontWeight,
+            modifier = Modifier.padding(glowPadding)
         )
 
+        // 2. Active, bright text (sung part) jo ek gradient brush se clipped hai
         Box(
             modifier = Modifier
-                .graphicsLayer {
-                     compositingStrategy = CompositingStrategy.Offscreen
-                     val currentTime = currentTimeProvider()
-                     if (currentTime >= endTime) {
-                         val fadeProgress = ((currentTime - endTime).toFloat() / 200f).coerceIn(0f, 1f)
-                         alpha = 1f - fadeProgress
-                     } else alpha = 1f
-                }
+                .padding(glowPadding)
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                 .drawWithContent {
                     val currentTime = currentTimeProvider()
                     val progress = if (duration > 0) ((currentTime - startTime).toFloat() / duration.toFloat()).coerceIn(0f, 1f) else if (currentTime >= endTime) 1f else 0f
-                    val isFading = currentTime >= endTime && currentTime < (endTime + 200L)
                     
-                    if ((progress > 0f && progress < 1f) || isFading) {
-                        drawContent()
-                        val fadeWidth = 20f 
-                        val paddingPx = glowPadding.toPx()
-                        val textWidth = size.width - (paddingPx * 2)
-                        val fillWidth = textWidth * progress
-                        
-                        val endFraction = (paddingPx + fillWidth + fadeWidth) / size.width
-                        val solidFraction = (paddingPx + fillWidth) / size.width
+                    // Pehle poora white text draw karo
+                    drawContent()
+                    
+                    // Ab ek black-to-transparent gradient draw karo jo move karega progress ke sath
+                    val fadeWidth = 20f // Gradient ki softness/blurriness kitni hogi
+                    val textWidth = size.width
+                    val fillWidth = textWidth * progress
+                    
+                    val endFraction = (fillWidth + fadeWidth) / size.width
+                    val solidFraction = fillWidth / size.width
 
-                        val softFillBrush = if (!isRtl) {
-                            Brush.horizontalGradient(0f to Color.Black, solidFraction.coerceAtLeast(0f) to Color.Black, endFraction.coerceAtMost(1f) to Color.Transparent)
-                        } else {
-                            val solidStartX = (paddingPx + (textWidth - fillWidth)).coerceIn(0f, size.width)
-                            val fadeStartX = (solidStartX - fadeWidth).coerceIn(0f, size.width)
-                            val fadeStartFraction = (fadeStartX / size.width).coerceIn(0f, 1f)
-                            val solidStartFraction = (solidStartX / size.width).coerceIn(0f, 1f)
-                            Brush.horizontalGradient(0f to Color.Transparent, fadeStartFraction to Color.Transparent, solidStartFraction to Color.Black, 1f to Color.Black)
-                        }
-                        drawRect(brush = softFillBrush, blendMode = BlendMode.DstIn)
+                    // DstIn blend mode se white text ko gradient mask ke hisab se clip karte hain
+                    val softFillBrush = if (!isRtl) {
+                        // LTR ke liye gradient left-to-right move hoga
+                        Brush.horizontalGradient(
+                            0f to Color.Black,
+                            solidFraction.coerceAtLeast(0f) to Color.Black,
+                            endFraction.coerceAtMost(1f) to Color.Transparent
+                        )
+                    } else {
+                        // RTL ke liye gradient right-to-left move hoga
+                        val solidStartX = (textWidth - fillWidth).coerceIn(0f, size.width)
+                        val fadeStartX = (solidStartX - fadeWidth).coerceIn(0f, size.width)
+                        val fadeStartFraction = (fadeStartX / size.width).coerceIn(0f, 1f)
+                        val solidStartFraction = (solidStartX / size.width).coerceIn(0f, 1f)
+                        Brush.horizontalGradient(
+                            0f to Color.Transparent,
+                            fadeStartFraction to Color.Transparent,
+                            solidStartFraction to Color.Black,
+                            1f to Color.Black
+                        )
                     }
+                    drawRect(brush = softFillBrush, blendMode = BlendMode.DstIn)
                 }
-                .padding(glowPadding)
         ) {
-             Text(text = text, fontSize = effectiveFontSize, color = textColor.copy(alpha = effectiveAlpha), fontWeight = fontWeight)
+            // Yeh wahi white text hai jo uper clipping logic mein drawContent() se use hota hai
+            Text(
+                text = text,
+                fontSize = effectiveFontSize,
+                color = textColor.copy(alpha = effectiveAlpha),
+                fontWeight = fontWeight
+            )
         }
     }
 }
@@ -603,8 +632,23 @@ fun LyricsV2(
                                     if (mainWords.isNotEmpty()) {
                                         FlowRow(modifier = Modifier.fillMaxWidth(), horizontalArrangement = arrangement) {
                                             mainWords.forEach { word ->
-                                                if (word.text == " " || word.text == "\n") Text(text = " ", style = MaterialTheme.typography.headlineMedium.copy(fontSize = lyricsTextSize.sp), color = Color.Transparent)
-                                                else KaraokeWord(text = word.text, startTime = (word.startTime * 1000).toLong(), endTime = (word.endTime * 1000).toLong(), currentTimeProvider = currentTimeProvider, isRtl = lineIsRtl, fontSize = if (isAllBackground) (lyricsTextSize * 0.82f).sp else lyricsTextSize.sp, textColor = textColor, inactiveAlpha = if (isActive) 0.35f else 0.7f, fontWeight = currentFontWeight, isBackground = isAllBackground, nudgeEnabled = isActive)
+                                                if (word.text == " " || word.text == "\n") {
+                                                    Text(text = " ", style = MaterialTheme.typography.headlineMedium.copy(fontSize = lyricsTextSize.sp), color = Color.Transparent)
+                                                } else {
+                                                    KaraokeWord(
+                                                        text = word.text,
+                                                        startTime = (word.startTime * 1000).toLong(),
+                                                        endTime = (word.endTime * 1000).toLong(),
+                                                        currentTimeProvider = currentTimeProvider,
+                                                        isRtl = lineIsRtl,
+                                                        fontSize = if (isAllBackground) (lyricsTextSize * 0.82f).sp else lyricsTextSize.sp,
+                                                        textColor = textColor,
+                                                        inactiveAlpha = if (isActive) 0.15f else 0.2f, // Yahan alpha update hua hai
+                                                        fontWeight = currentFontWeight,
+                                                        isBackground = isAllBackground,
+                                                        nudgeEnabled = isActive 
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -613,8 +657,23 @@ fun LyricsV2(
                                         if (mainWords.isNotEmpty()) Spacer(modifier = Modifier.height(4.dp))
                                         FlowRow(modifier = Modifier.fillMaxWidth().alpha(0.85f), horizontalArrangement = arrangement) {
                                             bgWords.forEach { word ->
-                                                if (word.text == " " || word.text == "\n") Text(text = " ", style = MaterialTheme.typography.headlineMedium.copy(fontSize = (lyricsTextSize * 0.65f).sp), color = Color.Transparent)
-                                                else KaraokeWord(text = word.text, startTime = (word.startTime * 1000).toLong(), endTime = (word.endTime * 1000).toLong(), currentTimeProvider = currentTimeProvider, isRtl = lineIsRtl, fontSize = (lyricsTextSize * 0.65f).sp, textColor = textColor, inactiveAlpha = if (isActive) 0.35f else 0.7f, fontWeight = currentFontWeight, isBackground = true, nudgeEnabled = isActive)
+                                                if (word.text == " " || word.text == "\n") {
+                                                    Text(text = " ", style = MaterialTheme.typography.headlineMedium.copy(fontSize = (lyricsTextSize * 0.65f).sp), color = Color.Transparent)
+                                                } else {
+                                                    KaraokeWord(
+                                                        text = word.text,
+                                                        startTime = (word.startTime * 1000).toLong(),
+                                                        endTime = (word.endTime * 1000).toLong(),
+                                                        currentTimeProvider = currentTimeProvider,
+                                                        isRtl = lineIsRtl,
+                                                        fontSize = (lyricsTextSize * 0.65f).sp,
+                                                        textColor = textColor,
+                                                        inactiveAlpha = if (isActive) 0.15f else 0.2f, // Yahan bhi alpha update hua hai
+                                                        fontWeight = currentFontWeight,
+                                                        isBackground = true,
+                                                        nudgeEnabled = isActive
+                                                    )
+                                                }
                                             }
                                         }
                                     }
